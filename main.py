@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/idle.wav'
+audio_path = 'test_audio/sample_set/4500-hold.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -58,7 +58,11 @@ plt.tight_layout()
 # Now we will try to estimate the fundamental frequency (f0) using a weighted approach based on the peaks in the frequency spectrum.
 from scipy.signal import find_peaks
 
-t = 20  # Time frame index to analyze
+mask = (f >= bottom_band) & (f <= 100)  # Define a mask for frequencies between 20 Hz and 100 Hz # We are interested in the lower frequency range for fundamental frequency estimation
+D_filtered = D.copy()  # Copy the original STFT to apply the filter
+D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
+
+t = 5  # Time frame index to analyze
 
 magnitude = np.abs(D_filtered[:, t])  # Get the magnitude of the STFT
 freqs = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
@@ -102,6 +106,15 @@ for f0 in peak_freqs:
         estimated_f0 = f0
         lowest_weight = weight
 
+        corrected_f0 = f0
+
+        for divisor in range(2, 5):  # Check for subharmonics up to the 4th harmonic
+            subharmonic = f0 / divisor
+
+            if np.any(np.abs(peak_freqs - subharmonic) < 5):  # Check if there's a peak near the subharmonic
+                corrected_f0 = subharmonic  # Update the estimated f0 to the subharmonic
+                break
+
 # Print the peaks and their corresponding frequencies
 print("Peaks and their corresponding frequencies:")
 for peak, freq in zip(peaks, peak_freqs):
@@ -109,7 +122,7 @@ for peak, freq in zip(peaks, peak_freqs):
 
 # Print the estimated fundamental frequency
 try:
-    print(f"Estimated fundamental frequency (f0) at time frame {t}: {estimated_f0:.2f} Hz")
+    print(f"Estimated fundamental frequency (f0) at time frame {t}: {corrected_f0:.2f} Hz")
 except TypeError:
     print(f"Estimated fundamental frequency (f0) at time frame {t}: None") # Handle the case where no valid f0 is found
 
