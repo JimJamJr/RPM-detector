@@ -13,8 +13,17 @@ window = 2048*8  # It's suggested to use a power of 2 for n_fft for computationa
 # Compute the Short-Time Fourier Transform (STFT)
 D = librosa.stft(y, n_fft=window) # Increased n_fft for better frequency resolution.
 
+f = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
+
+bottom_band = 20  # Define the lower frequency limit
+top_band = 220    # Define the upper frequency limit
+
+mask = (f >= bottom_band) & (f <= top_band)  # Define a mask for frequencies between 20 Hz and 200 Hz
+D_filtered = D.copy()  # Copy the original STFT to apply the filter
+D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
+
 # Convert the amplitude to decibels
-S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
+S_db = librosa.amplitude_to_db(np.abs(D_filtered), ref=np.max)
 
 # Display the spectrogram
 plt.figure(figsize=(10, 4))
