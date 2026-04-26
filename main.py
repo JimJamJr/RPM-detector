@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/5000-hold.wav'
+audio_path = 'test_audio/sample_set/idle.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -15,8 +15,8 @@ D = librosa.stft(y, n_fft=window) # Increased n_fft for better frequency resolut
 
 f = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
 
-bottom_band = 20  # Define the lower frequency limit
-top_band = 220    # Define the upper frequency limit
+bottom_band = 10  # Define the lower frequency limit
+top_band = 200    # Define the upper frequency limit
 
 mask = (f >= bottom_band) & (f <= top_band)  # Define a mask for frequencies between 20 Hz and 200 Hz
 D_filtered = D.copy()  # Copy the original STFT to apply the filter
@@ -55,11 +55,66 @@ plt.ylabel('Frequency (Hz)')
 plt.grid()
 plt.tight_layout()
 
-# Basic RPM calculation
-# Assuming the dominant frequency corresponds to the RPM, we can calculate it as follows:
-# RPM = (Frequency in Hz) * 60
+# Now we will try to estimate the fundamental frequency (f0) using a weighted approach based on the peaks in the frequency spectrum.
+from scipy.signal import find_peaks
 
-rpm = frequencies * 55
+t = 20  # Time frame index to analyze
+
+magnitude = np.abs(D_filtered[:, t])  # Get the magnitude of the STFT
+freqs = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
+
+# Find peaks in the frequency data
+peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.04)  # Adjust height as needed
+peak_freqs = freqs[peaks]
+peak_magnitudes = magnitude[peaks]
+
+# Function to use a apply weight to a possible fundamental frequency
+def weight_frequency(f0, peak_freqs):
+    tolerance = 0.05  # Frequency tolerance as a percentage
+    weight = 0
+
+    for peak in peak_freqs:
+        if peak < f0:
+            continue
+
+        nearest_harmonic = round(peak / f0)
+
+        if nearest_harmonic < 1:
+            continue
+
+        expected_freq = nearest_harmonic * f0
+        error = abs(peak - expected_freq) / expected_freq
+
+        if error < tolerance:
+            weight += 1 / nearest_harmonic # Higher harmonics contribute less to the weight
+
+    return weight
+
+# Estimate the fundamental frequency (f0) using a weighted approach
+estimated_f0 = None
+lowest_weight = -1
+
+for f0 in peak_freqs:
+    weight = weight_frequency(f0, peak_freqs)
+
+    if weight > lowest_weight:
+
+        estimated_f0 = f0
+        lowest_weight = weight
+
+# Print the peaks and their corresponding frequencies
+print("Peaks and their corresponding frequencies:")
+for peak, freq in zip(peaks, peak_freqs):
+    print(f"Peak at index {peak} corresponds to frequency {freq:.2f} Hz")
+
+# Print the estimated fundamental frequency
+try:
+    print(f"Estimated fundamental frequency (f0) at time frame {t}: {estimated_f0:.2f} Hz")
+except TypeError:
+    print(f"Estimated fundamental frequency (f0) at time frame {t}: None") # Handle the case where no valid f0 is found
+
+# Convert the estimated fundamental frequency to RPM
+rpm = frequencies * 60  # Assuming the audio is at 60 Hz (standard for audio)
 
 plt.figure(figsize=(10, 4))
 plt.plot(rpm)
