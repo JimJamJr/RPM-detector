@@ -1,2 +1,7 @@
+# ignore Python environment files
+venv/
 __pycache__/
 *.pyc
+
+# ignore large raw data files
+test_audio/raw/
