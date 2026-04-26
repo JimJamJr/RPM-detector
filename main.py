@@ -4,11 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/5000-hold-converted.wav'
+audio_path = 'test_audio/sample_set/5000-hold.wav'
 y, sr = librosa.load(audio_path)
 
 # Compute the Short-Time Fourier Transform (STFT)
-D = librosa.stft(y, n_fft=2048*5)
+D = librosa.stft(y, n_fft=2048*4) # Increased n_fft for better frequency resolution.
 
 # Convert the amplitude to decibels
 S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
@@ -30,10 +30,11 @@ magnitude = np.abs(D)
 freqs = np.argmax(magnitude, axis=0)
 
 # Convert the index to frequency
-frequencies = freqs * sr / D.shape[0]
+frequencies = freqs * sr / (2048*4)  # Convert index to frequency using the sampling rate and n_fft
 
 # Plot the frequencies over time
-print(frequencies[:20])  # Print the first 20 frequencies
+print("Frequencies (Hz) over time:")
+print(frequencies[:40])  # Print the first 40 frequencies
 plt.figure(figsize=(10, 4))
 plt.plot(frequencies)
 plt.title('Dominant Frequency Over Time')
