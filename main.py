@@ -8,7 +8,7 @@ audio_path = 'test_audio/sample_set/5000-hold.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
-window = 2048*4  # It's suggested to use a power of 2 for n_fft for computational efficiency.
+window = 2048*8  # It's suggested to use a power of 2 for n_fft for computational efficiency.
 
 # Compute the Short-Time Fourier Transform (STFT)
 D = librosa.stft(y, n_fft=window) # Increased n_fft for better frequency resolution.
@@ -43,6 +43,20 @@ plt.plot(frequencies)
 plt.title('Dominant Frequency Over Time')
 plt.xlabel('Time (frames)') 
 plt.ylabel('Frequency (Hz)')
+plt.grid()
+plt.tight_layout()
+
+# Basic RPM calculation
+# Assuming the dominant frequency corresponds to the RPM, we can calculate it as follows:
+# RPM = (Frequency in Hz) * 60
+
+rpm = frequencies * 55
+
+plt.figure(figsize=(10, 4))
+plt.plot(rpm)
+plt.title('Estimated RPM Over Time')
+plt.xlabel('Time (frames)')
+plt.ylabel('RPM')
 plt.grid()
 plt.tight_layout()
 plt.show()
