@@ -7,8 +7,11 @@ import matplotlib.pyplot as plt
 audio_path = 'test_audio/sample_set/5000-hold.wav'
 y, sr = librosa.load(audio_path)
 
+# controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
+window = 2048*4  # It's suggested to use a power of 2 for n_fft for computational efficiency.
+
 # Compute the Short-Time Fourier Transform (STFT)
-D = librosa.stft(y, n_fft=2048*4) # Increased n_fft for better frequency resolution.
+D = librosa.stft(y, n_fft=window) # Increased n_fft for better frequency resolution.
 
 # Convert the amplitude to decibels
 S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
@@ -30,7 +33,7 @@ magnitude = np.abs(D)
 freqs = np.argmax(magnitude, axis=0)
 
 # Convert the index to frequency
-frequencies = freqs * sr / (2048*4)  # Convert index to frequency using the sampling rate and n_fft
+frequencies = freqs * sr / (window)  # Convert index to frequency using the sampling rate and n_fft
 
 # Plot the frequencies over time
 print("Frequencies (Hz) over time:")
