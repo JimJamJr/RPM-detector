@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/idle.wav'
+audio_path = 'test_audio/sample_set/flat-4/4000-pull.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -36,7 +36,7 @@ plt.ylim(0, 200)  # Limit the y-axis to 200 Hz
 plt.tight_layout()
 
 # get the maginitude of the STFT
-magnitude = np.abs(D)
+magnitude = np.abs(D_filtered)
 
 # Find the index of the maximum magnitude
 freqs = np.argmax(magnitude, axis=0)
@@ -62,13 +62,13 @@ mask = (f >= bottom_band) & (f <= 100)  # Define a mask for frequencies between 
 D_filtered = D.copy()  # Copy the original STFT to apply the filter
 D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
 
-t = 10  # Time frame index to analyze
+t = 5  # Time frame index to analyze
 
 magnitude = np.abs(D_filtered[:, t])  # Get the magnitude of the STFT
 freqs = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
 
 # Find peaks in the frequency data
-peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.02)  # Adjust height as needed
+peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.04)  # Adjust height as needed
 peak_freqs = freqs[peaks]
 peak_magnitudes = magnitude[peaks]
 
@@ -126,14 +126,53 @@ try:
 except TypeError:
     print(f"Estimated fundamental frequency (f0) at time frame {t}: None") # Handle the case where no valid f0 is found
 
+# Second estimated fundamental frequency (f0) using a harmonic product spectrum approach
+
+def harmonic_product_spectrum(magnitude, freqs, max_harmonic=5):
+    hps = magnitude.copy()
+
+    for harmonic in range(2, max_harmonic + 1):
+        downsampled = librosa.resample(magnitude, orig_sr=len(magnitude), target_sr=len(magnitude) // harmonic)
+        hps[:len(downsampled)] *= downsampled
+
+    peak_index = np.argmax(hps)
+    estimated_f0 = freqs[peak_index]
+
+    return estimated_f0
+
+print(f"Estimated fundamental frequency (f0) using HPS at time frame {t}: {harmonic_product_spectrum(magnitude, freqs):.2f} Hz")
+
+# combine the two f0 estimations by applying the weighted approach to the HPS estimation as well
+hps_f0 = harmonic_product_spectrum(magnitude, freqs)
+
+def refine_f0(f0, peak_freqs):
+    tolerance = 0.05  # Frequency tolerance as a percentage
+    weight = weight_frequency(f0, peak_freqs)
+
+    if weight > lowest_weight:
+        return f0
+
+    for divisor in range(2, 5):  # Check for subharmonics up to the 4th harmonic
+        subharmonic = f0 / divisor
+
+        if np.any(np.abs(peak_freqs - subharmonic) < 5):  # Check if there's a peak near the subharmonic # Adjust the tolerance as needed
+            return subharmonic  # Update the estimated f0 to the subharmonic
+
+    return f0
+
+refined_hps_f0 = refine_f0(hps_f0, peak_freqs)
+print(f"Refined HPS estimated fundamental frequency (f0) at time frame {t}: {refined_hps_f0:.2f} Hz")
+
+# Rough RPM estimation based on the dominant frequency
 # Convert the estimated fundamental frequency to RPM
-rpm = frequencies * 60  # Assuming the audio is at 60 Hz (standard for audio)
+rpm = frequencies * 60 / 2  # Assuming the audio is at 60 Hz (standard for audio)
 
 plt.figure(figsize=(10, 4))
 plt.plot(rpm)
 plt.title('Estimated RPM Over Time')
 plt.xlabel('Time (frames)')
 plt.ylabel('RPM')
+plt.ylim(0, 6000)  # Limit the y-axis to a reasonable RPM range
 plt.grid()
 plt.tight_layout()
 plt.show()
