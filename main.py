@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/flat-4/2000-pull.wav'
+audio_path = 'test_audio/sample_set/flat-4/4000-pull.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -178,14 +178,11 @@ conversion_factors = {
     'v8': 4        # For a V8 engine, the fundamental frequency corresponds to one-fourth of the RPM
 }
 
-# Rough RPM estimation based on the dominant frequency
 # Convert the estimated fundamental frequency to RPM
 rpm = frequencies * 60 / conversion_factors['flat-4']  # Assuming the audio is at 60 Hz (standard for audio)
 
 # We will now attempt to smooth the RPM estimation by assuming that the RPM changes gradually over time.
-def rpm_smoothing(rpm, previous_rpm=None):
-    alpha = 0.85  # Smoothing factor between 0 and 1, where a higher value gives more weight to the current RPM and less to the previous RPM
-
+def rpm_smoothing(rpm, previous_rpm=None, alpha=0.85):
     if previous_rpm is None:
         smoothed_rpm = rpm
     else:
@@ -213,7 +210,51 @@ def rpm_over_time(rpm, idle_rpm, max_change=500):  # max_change is the maximum a
 # Convert the estimated fundamental frequency to RPM and apply smoothing
 idle_rpm = refined_hps_f0 * 60 / conversion_factors['flat-4']  # Use the refined HPS estimated f0 as the idle RPM
 
-rpm_values = rpm_over_time(rpm, idle_rpm, 100)
+mask = (f >= bottom_band) & (f <= top_band)  # Define a mask for frequencies between 20 Hz and 200 Hz
+D_filtered = D.copy()  # Copy the original STFT to apply the filter
+D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
+
+# Apply fundamental freuency isolation to each time frame to get a more accurate RPM estimation over time
+def refine_f0_over_time(D, freqs):
+    rpm_values = []
+    previous_rpm = idle_rpm
+    previous_f0 = refined_hps_f0  # Start with the refined HPS estimated f0 as the initial f0
+
+    for t in range(D.shape[1]):  # Loop through each time frame in the STFT
+        max_change = 700 # Limit the maximum change in RPM between frames to 50 RPM, adjust as needed based on the expected acceleration of the engine
+
+        magnitude = np.abs(D[:, t])  # Get the magnitude of the STFT for the current time frame
+
+        f0 = harmonic_product_spectrum(magnitude, freqs)  # Estimate the fundamental frequency for the current time frame
+
+        peak_freqs = freqs[find_peaks(magnitude, height=np.max(magnitude)*0.4)[0]]  # Get the peak frequencies for the current time frame, adjust height as needed
+        refined_f0 = refine_f0(f0, peak_freqs)  # Refine the estimated f0 using the weighted approach
+
+        ratios = [1,2,3,0.5,1/3]
+
+        valid = any(abs(f0-previous_f0 * ratio) < 5 for ratio in ratios)  # Check if the current f0 is within a reasonable range of the previous f0, adjust tolerance as needed
+        if not valid:
+            refined_f0 = previous_f0 * 0.9 + refined_f0 * 0.1  # If the current f0 is not valid, use the previous f0 instead, but apply some smoothing to allow for gradual changes
+
+        max_delta_f0 = 15  # Limit the maximum change in f0 between frames to 20 Hz, adjust as needed based on the expected acceleration of the engine
+        if abs(refined_f0 - previous_f0) > max_delta_f0:
+            refined_f0 = previous_f0 + np.sign(refined_f0 - previous_f0) * max_delta_f0  # Limit the change in f0 to prevent unrealistic jumps
+
+        print(f"Time frame {t}: Estimated f0 = {f0:.2f} Hz, Refined f0 = {refined_f0:.2f} Hz")
+
+        current_rpm = refined_f0 * 60 / conversion_factors['flat-4']  # Convert the refined f0 to RPM
+        smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.9)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
+
+        # Limit the change in RPM to prevent unrealistic jumps
+        if abs(smoothed_rpm - previous_rpm) > max_change:
+            smoothed_rpm = previous_rpm + np.sign(smoothed_rpm - previous_rpm) * max_change
+        
+        rpm_values.append(smoothed_rpm)
+        previous_rpm = smoothed_rpm  # Update the previous RPM for the next iteration
+        previous_f0 = refined_f0  # Update the previous f0 for the next iteration
+    return rpm_values
+
+rpm_values = refine_f0_over_time(D, freqs)
 
 plt.figure(figsize=(10, 4))
 plt.plot(rpm_values)
