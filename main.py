@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/4500-hold.wav'
+audio_path = 'test_audio/sample_set/idle.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -62,13 +62,13 @@ mask = (f >= bottom_band) & (f <= 100)  # Define a mask for frequencies between 
 D_filtered = D.copy()  # Copy the original STFT to apply the filter
 D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
 
-t = 5  # Time frame index to analyze
+t = 10  # Time frame index to analyze
 
 magnitude = np.abs(D_filtered[:, t])  # Get the magnitude of the STFT
 freqs = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
 
 # Find peaks in the frequency data
-peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.04)  # Adjust height as needed
+peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.02)  # Adjust height as needed
 peak_freqs = freqs[peaks]
 peak_magnitudes = magnitude[peaks]
 
@@ -111,7 +111,7 @@ for f0 in peak_freqs:
         for divisor in range(2, 5):  # Check for subharmonics up to the 4th harmonic
             subharmonic = f0 / divisor
 
-            if np.any(np.abs(peak_freqs - subharmonic) < 5):  # Check if there's a peak near the subharmonic
+            if np.any(np.abs(peak_freqs - subharmonic) < 5):  # Check if there's a peak near the subharmonic # Adjust the tolerance as needed
                 corrected_f0 = subharmonic  # Update the estimated f0 to the subharmonic
                 break
 
