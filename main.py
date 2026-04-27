@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/flat-4/4000-pull.wav'
+audio_path = 'test_audio/sample_set/flat-4/2000-pull.wav'
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
@@ -163,13 +163,61 @@ def refine_f0(f0, peak_freqs):
 refined_hps_f0 = refine_f0(hps_f0, peak_freqs)
 print(f"Refined HPS estimated fundamental frequency (f0) at time frame {t}: {refined_hps_f0:.2f} Hz")
 
+# Allows you to pick the engine type, and applies the appropriate conversion.
+conversion_factors = {
+    'single-cylinder': 1,  # For a single-cylinder engine, the fundamental frequency corresponds directly to the RPM
+    'twin-cylinder': 2,  # For a twin-cylinder engine, the fundamental frequency corresponds to half the RPM
+    'flat-4': 2,  # For a flat-4 engine, the fundamental frequency corresponds to half the RPM
+    'flat-6': 3,  # For a flat-6 engine, the fundamental frequency corresponds to one-third of the RPM
+    'flat-8': 4,  # For a flat-8 engine, the fundamental frequency corresponds to one-fourth of the RPM
+    'inline-4': 2,  # For an inline-4 engine, the fundamental frequency corresponds to half the RPM
+    'inline-6': 3,  # For an inline-6 engine, the fundamental frequency corresponds to one-third of the RPM
+    'v2': 1,       # For a V2 engine, the fundamental frequency corresponds directly to the RPM
+    'v4': 2,       # For a V4 engine, the fundamental frequency corresponds to half the RPM
+    'v6': 3,       # For a V6 engine, the fundamental frequency corresponds to one-third of the RPM
+    'v8': 4        # For a V8 engine, the fundamental frequency corresponds to one-fourth of the RPM
+}
+
 # Rough RPM estimation based on the dominant frequency
 # Convert the estimated fundamental frequency to RPM
-rpm = frequencies * 60 / 2  # Assuming the audio is at 60 Hz (standard for audio)
+rpm = frequencies * 60 / conversion_factors['flat-4']  # Assuming the audio is at 60 Hz (standard for audio)
+
+# We will now attempt to smooth the RPM estimation by assuming that the RPM changes gradually over time.
+def rpm_smoothing(rpm, previous_rpm=None):
+    alpha = 0.85  # Smoothing factor between 0 and 1, where a higher value gives more weight to the current RPM and less to the previous RPM
+
+    if previous_rpm is None:
+        smoothed_rpm = rpm
+    else:
+        smoothed_rpm = alpha * rpm + (1 - alpha) * previous_rpm
+
+    return smoothed_rpm
+
+# Function to calculate RPM over time with smoothing
+def rpm_over_time(rpm, idle_rpm, max_change=500):  # max_change is the maximum allowed change in RPM between frames
+    rpm_values = []
+
+    for t in range(rpm.shape[0]):
+        current_rpm = rpm[t]
+        previous_rpm = rpm_values[-1] if rpm_values else idle_rpm  # Use idle RPM as the previous RPM for the first frame
+        smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm)
+
+        # Limit the change in RPM to prevent unrealistic jumps
+        if previous_rpm is not None:
+            if abs(smoothed_rpm - previous_rpm) > max_change:
+                smoothed_rpm = previous_rpm + np.sign(smoothed_rpm - previous_rpm) * max_change
+
+        rpm_values.append(smoothed_rpm)
+    return rpm_values
+
+# Convert the estimated fundamental frequency to RPM and apply smoothing
+idle_rpm = refined_hps_f0 * 60 / conversion_factors['flat-4']  # Use the refined HPS estimated f0 as the idle RPM
+
+rpm_values = rpm_over_time(rpm, idle_rpm, 100)
 
 plt.figure(figsize=(10, 4))
-plt.plot(rpm)
-plt.title('Estimated RPM Over Time')
+plt.plot(rpm_values)
+plt.title('Smoothed Estimated RPM Over Time')
 plt.xlabel('Time (frames)')
 plt.ylabel('RPM')
 plt.ylim(0, 6000)  # Limit the y-axis to a reasonable RPM range
