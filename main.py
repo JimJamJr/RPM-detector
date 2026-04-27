@@ -28,7 +28,7 @@ y, sr = librosa.load(audio_path)
 window = 2048*8  # It's suggested to use a power of 2 for n_fft for computational efficiency.
 
 # Compute the Short-Time Fourier Transform (STFT)
-D = librosa.stft(y, n_fft=window) # Increased n_fft for better frequency resolution.
+D = librosa.stft(y, n_fft=window, hop_length=window//2) # Increased n_fft for better frequency resolution.
 
 f = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
 
@@ -247,10 +247,13 @@ def refine_f0_over_time(D, freqs):
 
 rpm_values = refine_f0_over_time(D, freqs)
 
+# Use time in seconds for the x-axis instead of frames
+times = librosa.frames_to_time(np.arange(D.shape[1]), sr=sr, hop_length=window//2)  # Convert frame indices to time in seconds
+
 plt.figure(figsize=(10, 4))
-plt.plot(rpm_values)
+plt.plot(times, rpm_values)
 plt.title('Smoothed Estimated RPM Over Time')
-plt.xlabel('Time (frames)')
+plt.xlabel('Time (seconds)')
 plt.ylabel('RPM')
 plt.ylim(0, 6000)  # Limit the y-axis to a reasonable RPM range
 plt.grid()
