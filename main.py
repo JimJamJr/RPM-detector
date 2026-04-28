@@ -19,8 +19,8 @@ conversion_factors = {
 }
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/single/idle.wav'
-engine_type = 'single-cylinder'  # Change this to the appropriate engine type
+audio_path = 'test_audio/sample_set/flat-4/4000-pull.wav'
+engine_type = 'flat-4'  # Change this to the appropriate engine type
 
 y, sr = librosa.load(audio_path)
 
