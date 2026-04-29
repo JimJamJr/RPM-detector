@@ -27,7 +27,7 @@ engine_type = 'single-cylinder'  # Change this to the appropriate engine type
 y, sr = librosa.load(audio_path)
 
 # controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
-window = 2048*8  # It's suggested to use a power of 2 for n_fft for computational efficiency.
+window = 2048  # It's suggested to use a power of 2 for n_fft for computational efficiency.
 
 # Compute the Short-Time Fourier Transform (STFT)
 D = librosa.stft(y, n_fft=window, hop_length=window//2) # Increased n_fft for better frequency resolution.
@@ -87,7 +87,6 @@ def harmonic_product_spectrum(magnitude, freqs, max_harmonic=5):
     return estimated_f0
 
 # combine the two f0 estimations by applying the weighted approach to the HPS estimation as well
-
 def refine_f0(f0, peak_freqs):
     lowest_weight = 0.5  # Define a threshold for the lowest acceptable weight, adjust as needed based on experimentation
     weight = weight_frequency(f0, peak_freqs)
@@ -104,7 +103,7 @@ def refine_f0(f0, peak_freqs):
     return f0
 
 # We will now attempt to smooth the RPM estimation by assuming that the RPM changes gradually over time.
-def rpm_smoothing(rpm, previous_rpm=None, alpha=0.85):
+def rpm_smoothing(rpm, previous_rpm=None, alpha=0.85): # Alpha is the smoothing factor, adjust it as needed for more or less smoothing. A higher alpha gives more weight to the current RPM, while a lower alpha gives more weight to the previous RPM.
     if previous_rpm is None:
         smoothed_rpm = rpm
     else:
@@ -112,46 +111,44 @@ def rpm_smoothing(rpm, previous_rpm=None, alpha=0.85):
 
     return smoothed_rpm
 
-# Function to calculate RPM over time with smoothing
-def rpm_over_time(rpm, idle_rpm, max_change=500):  # max_change is the maximum allowed change in RPM between frames
-    rpm_values = []
-
-    for t in range(rpm.shape[0]):
-        current_rpm = rpm[t]
-        previous_rpm = rpm_values[-1] if rpm_values else idle_rpm  # Use idle RPM as the previous RPM for the first frame
-        smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm)
-
-        # Limit the change in RPM to prevent unrealistic jumps
-        if previous_rpm is not None:
-            if abs(smoothed_rpm - previous_rpm) > max_change:
-                smoothed_rpm = previous_rpm + np.sign(smoothed_rpm - previous_rpm) * max_change
-
-        rpm_values.append(smoothed_rpm)
-    return rpm_values
-
-
 # Apply fundamental freuency isolation to each time frame to get a more accurate RPM estimation over time
-def refine_f0_over_time(D, freqs):
+def refine_rpm_over_time(D, freqs):
 
     magnitude = np.abs(D[:, 1])  # Get the initial magnitude
 
     rpm_values = []
-    previous_f0 = harmonic_product_spectrum(magnitude, freqs)  # Start with the refined HPS estimated f0 as the initial f0
-    previous_rpm = previous_f0 * 60 / conversion_factors[engine_type]  # Convert the initial f0 to RPM for the initial previous RPM
+    previous_f0 = None
+    previous_rpm = None
 
     for t in range(D.shape[1]):  # Loop through each time frame in the STFT
-        max_change = 700 # Limit the maximum change in RPM between frames to 50 RPM, adjust as needed based on the expected acceleration of the engine
+
+        max_change = 150 # Limit the maximum change in RPM between frames to 50 RPM, adjust as needed based on the expected acceleration of the engine
 
         magnitude = np.abs(D[:, t])  # Get the magnitude of the STFT for the current time frame
 
         f0 = harmonic_product_spectrum(magnitude, freqs)  # Estimate the fundamental frequency for the current time frame
 
-        peak_freqs = freqs[find_peaks(magnitude, height=np.max(magnitude)*0.4)[0]]  # Get the peak frequencies for the current time frame, adjust height as needed
-        refined_f0 = refine_f0(f0, peak_freqs)  # Refine the estimated f0 using the weighted approach
+        # Get the peak frequencies for the current time frame, adjust prominence as needed
+        peaks, _ = find_peaks(magnitude, height=np.max(magnitude)*0.04)  # Adjust height as needed
+        try:
+            peak_freqs = freqs[peaks]
+        except IndexError:
+            peak_freqs = None
+
+        if peak_freqs is None or len(peak_freqs) == 0:
+            refined_f0 = f0  # Refine the estimated f0 using the weighted approach
+        else:
+            refined_f0 = refine_f0(f0, peak_freqs)  # Refine the estimated f0 using the weighted approach
+
+        if previous_f0 is None:
+            previous_f0 = refined_f0
+            previous_rpm = previous_f0 * 60 / conversion_factors[engine_type]  # Convert the initial f0 to RPM for the first frame
 
         ratios = [1,2,3,0.5,1/3]
 
-        valid = any(abs(f0-previous_f0 * ratio) < 5 for ratio in ratios)  # Check if the current f0 is within a reasonable range of the previous f0, adjust tolerance as needed
+        tolerance = max(5, previous_f0 * 0.02)  # Set a tolerance for validating the current f0, adjust as needed based on experimentation and the expected variability of the engine sound
+
+        valid = any(abs(refined_f0-previous_f0 * ratio) < tolerance for ratio in ratios)  # Check if the current f0 is within a reasonable range of the previous f0, adjust tolerance as needed
         if not valid:
             refined_f0 = previous_f0 * 0.9 + refined_f0 * 0.1  # If the current f0 is not valid, use the previous f0 instead, but apply some smoothing to allow for gradual changes
 
@@ -160,28 +157,135 @@ def refine_f0_over_time(D, freqs):
             refined_f0 = previous_f0 + np.sign(refined_f0 - previous_f0) * max_delta_f0  # Limit the change in f0 to prevent unrealistic jumps
 
         current_rpm = refined_f0 * 60 / conversion_factors[engine_type]  # Convert the refined f0 to RPM
-        smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.9)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
 
         # Limit the change in RPM to prevent unrealistic jumps
-        if abs(smoothed_rpm - previous_rpm) > max_change:
-            smoothed_rpm = previous_rpm + np.sign(smoothed_rpm - previous_rpm) * max_change
+        if abs(current_rpm - previous_rpm) > max_change:
+            current_rpm = previous_rpm + np.sign(current_rpm - previous_rpm) * max_change
         
+        smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.4)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
         rpm_values.append(smoothed_rpm)
         previous_rpm = smoothed_rpm  # Update the previous RPM for the next iteration
         previous_f0 = refined_f0  # Update the previous f0 for the next iteration
     return rpm_values
 
-rpm_values = refine_f0_over_time(D, freqs)
+# ----------------------------------------------------------------------------------
+# Runs the Real-Time estimation of RPM over time
 
-# Use time in seconds for the x-axis instead of frames
-times = librosa.frames_to_time(np.arange(D.shape[1]), sr=sr, hop_length=window//2)  # Convert frame indices to time in seconds
+sr = 44100  # Sample rate for real-time audio processing
+window = 2048  # Window size for real-time audio processing, using the same window size as the offline analysis for consistency
+blocksize = window // 2  # Block size for real-time audio processing, using the same window size for consistency
 
-plt.figure(figsize=(10, 4))
-plt.plot(times, rpm_values)
-plt.title('Smoothed Estimated RPM Over Time')
-plt.xlabel('Time (seconds)')
-plt.ylabel('RPM')
-plt.ylim(0, 6000)  # Limit the y-axis to a reasonable RPM range
-plt.grid()
-plt.tight_layout()
-plt.show()
+buffer = np.zeros(window)  # Initialize a buffer to hold the audio data for processing
+
+# Returns the waveform data from the audio stream, and applies the same processing steps as the offline analysis to estimate the RPM in real-time
+def get_signal(indata):
+    global buffer
+    buffer = np.concatenate((buffer, indata[:, 0]))  # Append the new audio data to the buffer
+
+    if len(buffer) >= window:  # Check if the buffer has enough data for processing
+        signal = buffer[:window]  # Get the current window of audio data for processing
+        buffer = buffer[blocksize:]  # Remove the processed data from the buffer, using the same block size as the hop length for consistency
+        return signal
+    else:
+        return None  # Return None if there is not enough data in the buffer for processing
+
+# Use auto-correlation to estimate the fundamental frequency from the audio signal, which can be used to calculate the RPM in real-time
+def estimate_f0(signal):
+    autocorr = np.correlate(signal, signal, mode='full')
+    autocorr = autocorr[len(autocorr)//2:]
+    min_lag = int(sr / 200)  # Minimum lag corresponding to the maximum expected frequency (200 Hz)
+    max_lag = int(sr / 10)   # Maximum lag corresponding to the minimum expected frequency (10 Hz)
+
+    search_range = autocorr[min_lag:max_lag]  # Limit the search range for peaks to the expected frequency range
+    peak_lag = np.argmax(search_range) + min_lag  # Find the lag of the peak in the autocorrelation
+    f0 = sr / peak_lag  # Convert the lag to frequency
+
+    confidence = autocorr[peak_lag]  # Calculate a confidence measure based on the ratio of the peak to the zero-lag value
+    return f0, confidence
+
+# validate the estimated f0 by checking the confidence of the estimation, the harmonic structure of the frequency and the consistency of the estimation over time, similar to the approach used in the offline analysis
+def validate_f0(f0, confidence, previous_f0):
+    if confidence < 0.5:  # Check if the confidence of the estimation is above a certain threshold, adjust as needed based on experimentation
+        return False
+
+    if previous_f0 is not None:
+        if abs(f0 - previous_f0) > 20:  # Check if the estimated f0 is within a reasonable range of the previous f0, adjust as needed based on experimentation and the expected variability of the engine sound
+            return False
+
+    return True
+
+# Update the RPM estimation in real-time by applying the same conversion factors and smoothing techniques as the offline analysis, while also ensuring that the estimation is validated and consistent over time
+def update_rpm_estimation(f0, previous_f0, previous_rpm):
+    if f0 is None:
+        return previous_rpm  # If the estimated f0 is None, return the previous RPM estimation
+
+    current_rpm = f0 * 60 / conversion_factors[engine_type]  # Convert the estimated f0 to RPM
+
+    # Limit the change in RPM to prevent unrealistic jumps
+    max_change = 150  # Adjust as needed based on the expected acceleration of the engine
+    if previous_rpm is not None and abs(current_rpm - previous_rpm) > max_change:
+        current_rpm = previous_rpm + np.sign(current_rpm - previous_rpm) * max_change
+
+    smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.4)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
+
+    if previous_f0 is not None and abs(f0 - previous_f0) < 20:
+        previous_f0 = f0  # Update the previous f0 for the next iteration
+    previous_rpm = smoothed_rpm  # Update the previous RPM for the next iteration
+
+    return smoothed_rpm
+
+# Define a callback function to process the audio data in real-time
+def callback(indata, frames, time, status):
+    global buffer
+    global previous_f0, previous_rpm
+
+    signal = get_signal(indata)  # Get the current window of audio data for processing
+    if signal is not None:
+        f0, confidence = estimate_f0(signal)  # Estimate the fundamental frequency from the audio signal
+        if validate_f0(f0, confidence, previous_f0):  # Validate the estimated f0, replace previous_f0 with actual previous f0 value for consistency
+            rpm = update_rpm_estimation(f0, previous_f0, previous_rpm)  # Update the RPM estimation, replace previous_f0 and previous_rpm with actual values for consistency
+            print(f"Estimated RPM: {rpm:.2f}")  # Print the estimated RPM in real-time
+
+# Below is the test code to run the real-time estimation on a test audio file, you can replace the callback function with the actual processing code to estimate the RPM in real-time from the audio stream.
+
+# === LOAD FILE ===
+audio, sr = librosa.load(audio_path, sr=None, mono=True)
+
+blocksize = window // 2  # same as your stream
+pointer = 0
+
+previous_f0 = None  # Initialize previous_f0 for validation
+previous_rpm = None  # Initialize previous_rpm for smoothing
+
+# === SIMULATED STREAM LOOP ===
+while True:
+    if pointer >= len(audio):
+        break  # or reset pointer = 0 to loop
+
+    chunk = audio[pointer:pointer + blocksize]
+
+    if len(chunk) < blocksize:
+        chunk = np.pad(chunk, (0, blocksize - len(chunk)))
+
+    # reshape to match InputStream format
+    indata = chunk.reshape(-1, 1)
+
+    # call your callback EXACTLY like sounddevice would
+    callback(indata, blocksize, None, None)
+
+    pointer += blocksize
+
+    # match real-time speed
+    #sd.sleep(int(1000 * blocksize / sr))
+
+# Sets up the audio stream for real-time processing, using the same sample rate and window size as the offline analysis for consistency
+stream = sd.InputStream(
+    channels=1, 
+    samplerate=sr, 
+    blocksize=window//2,
+    callback=callback)  # Use the same window size for the blocksize to ensure consistent processing
+
+# Start the audio stream and process the audio data in real-time
+with stream:
+    while True:
+        pass
