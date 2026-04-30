@@ -24,33 +24,6 @@ conversion_factors = {
 audio_path = 'test_audio/sample_set/flat-4/3000-pull.wav'
 engine_type = 'flat-4'  # Change this to the appropriate engine type
 
-y, sr = librosa.load(audio_path)
-
-# controls the length of the window for the STFT. A larger n_fft provides better frequency resolution but worse time resolution.
-window = 2048  # It's suggested to use a power of 2 for n_fft for computational efficiency.
-
-# Compute the Short-Time Fourier Transform (STFT)
-D = librosa.stft(y, n_fft=window, hop_length=window//2) # Increased n_fft for better frequency resolution.
-
-f = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
-
-bottom_band = 10  # Define the lower frequency limit
-top_band = 200    # Define the upper frequency limit
-
-
-mask = (f >= bottom_band) & (f <= top_band)  # Define a mask for frequencies between 20 Hz and 200 Hz
-D_filtered = D.copy()  # Copy the original STFT to apply the filter
-D_filtered[~mask, :] = 0  # Set the values outside the desired frequency range to zero
-
-
-magnitude = np.abs(D_filtered) # get the maginitude of the STFT
-freqs = librosa.fft_frequencies(sr=sr, n_fft=window)  # Get the corresponding frequencies for the STFT bins
-
-# Find peaks in the frequency data
-peaks, _ = find_peaks(magnitude[0], height=np.max(magnitude)*0.04)  # Adjust height as needed
-peak_freqs = freqs[peaks]
-peak_magnitudes = magnitude[peaks]
-
 # Function to use a apply weight to a possible fundamental frequency
 def weight_frequency(f0, peak_freqs):
     tolerance = 0.05  # Frequency tolerance as a percentage
@@ -171,12 +144,6 @@ def refine_rpm_over_time(D, freqs):
 
 # ----------------------------------------------------------------------------------
 # Runs the Real-Time estimation of RPM over time
-
-sr = 44100  # Sample rate for real-time audio processing
-window = 2048  # Window size for real-time audio processing, using the same window size as the offline analysis for consistency
-blocksize = window // 2  # Block size for real-time audio processing, using the same window size for consistency
-
-buffer = np.zeros(window)  # Initialize a buffer to hold the audio data for processing
 
 # Returns the waveform data from the audio stream, and applies the same processing steps as the offline analysis to estimate the RPM in real-time
 def get_signal(indata):
@@ -302,6 +269,8 @@ def autocorrelation(signal):
 
 # === LOAD FILE ===
 audio, sr = librosa.load(audio_path, sr=None, mono=True)
+
+buffer = np.zeros(window)  # Initialize a buffer to hold the audio data for processing
 
 window = 2048  # Window size for real-time audio processing, using the same window size as the offline analysis for consistency
 sr = 44100  # Sample rate for real-time audio processing
