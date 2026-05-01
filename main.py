@@ -21,7 +21,7 @@ conversion_factors = {
 }
 
 # Load the audio file
-audio_path = 'test_audio/sample_set/flat-4/3000-pull.wav'
+audio_path = 'test_audio/sample_set/flat-4/start-idle.wav'
 engine_type = 'flat-4'  # Change this to the appropriate engine type
 
 # Function to use a apply weight to a possible fundamental frequency
@@ -145,6 +145,92 @@ def refine_rpm_over_time(D, freqs):
 # ----------------------------------------------------------------------------------
 # Runs the Real-Time estimation of RPM over time
 
+def exists_near(value, set, tolerance):
+    return any(abs(c - value) < tolerance for c in set)
+
+# selects the most likely fundamental peak in the range of lags
+def select_peaks(autocorr, search_range, min_lag, previous_lag):
+    global rpm_estimates
+    threshold = 0.3
+
+    peaks, properties = find_peaks(search_range, prominence=threshold) # Extract peaks
+
+    peaks = peaks + min_lag # Realign peak indices
+
+    strong_peaks = np.sort(peaks) # The most prominent peaks in order of highest frequency to lowest
+    candidates = set(strong_peaks) # For easy look-up of harmonics
+    strengths = autocorr[strong_peaks] # the strengths of all the strong peaks
+    supports = []
+    penalties = []
+    fundamentals = []
+    continuities = []
+
+    tolerance = 20
+    scores = []
+    for peak in strong_peaks:
+        tolerance = (int)(0.1 * peak)
+        # take the confidence of the autocorrelation into account
+        strength = abs(autocorr[peak])
+
+        # if there are harmonics above, award, if there are harmonics below, penalise
+        harmonic_support = 1
+        harmonic_penalty = 1
+        for divisor in range(2,5):
+            if exists_near(peak / divisor, candidates, tolerance):
+                harmonic_penalty *= 2
+            if exists_near(peak * divisor, candidates, tolerance):
+                harmonic_support *= 2
+        
+        supports.append(harmonic_support)
+        penalties.append(harmonic_penalty)
+
+        # reward higher lags (lower frequencies)
+        fundamental = peak
+        fundamentals.append(fundamental)
+
+        # rewards more temporally continuous lags
+        if previous_lag is not None:
+            continuity = np.exp(-abs(peak - previous_lag) / (300))
+            if abs(peak - previous_lag) > 0.5 * previous_lag:
+                continuity = 1  # ignore continuity
+        else:
+            continuity = 1
+
+        continuities.append(continuity)
+
+        # Combine attributes to form a score
+        score = fundamental * continuity * harmonic_support / harmonic_penalty
+        scores.append(score)
+
+    if len(scores) != 0:
+        lag = strong_peaks[np.argmax(scores)]
+        confidence = np.max(scores)
+
+        print(f"Strong peaks: {strong_peaks}")
+        print(f"Strengths: {strengths}")
+        print(f"Fundamentals: {fundamentals}")
+        print(f"Continuities: {continuities}")
+        print(f"Harmonic Supports: {supports}")
+        print(f"Harmonic penalties: {penalties}")
+
+        print(f"Scores: {scores}")
+        print(f"Using peak {lag}")
+
+        frequency = (sr/ lag)
+        print(f"Raw frequency estimate: {frequency}")
+
+        rpm_estimate = frequency * 60 / conversion_factors[engine_type]
+        rpm_estimates.append(rpm_estimate)
+        print(f"Raw rpm estimation: {rpm_estimate}")
+
+        return lag, confidence
+    else:
+        print("No strong peaks")
+        return None, 0
+
+
+
+
 # Returns the waveform data from the audio stream, and applies the same processing steps as the offline analysis to estimate the RPM in real-time
 def get_signal(indata):
     global buffer
@@ -159,6 +245,8 @@ def get_signal(indata):
 
 # Use auto-correlation to estimate the fundamental frequency from the audio signal, which can be used to calculate the RPM in real-time
 def estimate_f0(signal):
+    global previous_lag
+
     autocorr = np.correlate(signal, signal, mode='full')
     autocorr = autocorr[len(autocorr)//2:]
     min_lag = int(sr / 200)  # Minimum lag corresponding to the maximum expected frequency (10 Hz)
@@ -168,10 +256,16 @@ def estimate_f0(signal):
     if len(search_range) == 0:
         print("No valid lags in the search range for f0 estimation")  # Print a message if there are no valid lags in the search range
         return None, 0  # Return None and zero confidence if there are no valid lags in the search range
-    peak_lag = np.argmax(search_range) + min_lag  # Find the lag of the peak in the autocorrelation
+
+    peak_lag, confidence = select_peaks(autocorr, search_range, min_lag, previous_lag)  # Find the lag of the peak in the autocorrelation
+    
+    previous_lag = peak_lag
+
+    if peak_lag is None:
+        return None, 0
+
     f0 = sr / peak_lag  # Convert the lag to frequency
 
-    confidence = autocorr[peak_lag]  # Calculate a confidence measure based on the ratio of the peak to the zero-lag value
     return f0, confidence
 
 # validate the estimated f0 by checking the confidence of the estimation, the harmonic structure of the frequency and the consistency of the estimation over time, similar to the approach used in the offline analysis
@@ -195,13 +289,14 @@ def update_rpm_estimation(f0):
         return previous_rpm  # If the estimated f0 is None, return the previous RPM estimation
 
     current_rpm = f0 * 60 / conversion_factors[engine_type]  # Convert the estimated f0 to RPM
+    print(f"Current RPM: {current_rpm}")
 
     # Limit the change in RPM to prevent unrealistic jumps
     max_change = 150  # Adjust as needed based on the expected acceleration of the engine
     if previous_rpm is not None and abs(current_rpm - previous_rpm) > max_change:
         current_rpm = previous_rpm + np.sign(current_rpm - previous_rpm) * max_change
 
-    smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.1)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
+    smoothed_rpm = rpm_smoothing(current_rpm, previous_rpm, alpha=0.8)  # Smooth the RPM estimation, adjust alpha as needed for more or less smoothing
 
     if previous_f0 is not None and abs(f0 - previous_f0) < 20:
         previous_f0 = f0  # Update the previous f0 for the next iteration
@@ -219,13 +314,13 @@ def callback(indata, frames, time, status):
         f0, confidence = estimate_f0(signal)  # Estimate the fundamental frequency from the audio signal
         if validate_f0(f0, confidence, previous_f0):  # Validate the estimated f0, replace previous_f0 with actual previous f0 value for consistency
             rpm = update_rpm_estimation(f0)  # Update the RPM estimation, replace previous_f0 and previous_rpm with actual values for consistency
-            print(f"Estimated RPM: {rpm:.2f}")  # Print the estimated RPM in real-time
+            print(f"Estimated RPM: {rpm:.2f}\n")  # Print the estimated RPM in real-time
             return rpm  # Return the estimated RPM from the callback function, you can modify this to send the RPM value to a display or another part of your application as needed
 
         else:
-            print("Invalid f0 estimation, skipping RPM update")  # Print a message if the f0 estimation is not valid
+            print("Invalid f0 estimation, skipping RPM update\n")  # Print a message if the f0 estimation is not valid
     else:
-        print("Not enough data in buffer for processing")  # Print a message if there is not enough data in the buffer for processing
+        print("Not enough data in buffer for processing\n")  # Print a message if there is not enough data in the buffer for processing
 
 
 # Below is the test code to run the real-time estimation on a test audio file, you can replace the callback function with the actual processing code to estimate the RPM in real-time from the audio stream.
@@ -241,6 +336,7 @@ pointer = blocksize  # Start processing from the first block of audio data
 
 previous_f0 = None  # Initialize previous_f0 for validation
 previous_rpm = None  # Initialize previous_rpm for smoothing
+previous_lag = None # Initialize previous_lag for peak selection
 
 # Get the autocorrelation of the first chunk of audio data and display the graph to visualize the peaks and the estimated fundamental frequency
 
@@ -270,11 +366,10 @@ def autocorrelation(signal):
 # === LOAD FILE ===
 audio, sr = librosa.load(audio_path, sr=None, mono=True)
 
-buffer = np.zeros(window)  # Initialize a buffer to hold the audio data for processing
-
 window = 2048  # Window size for real-time audio processing, using the same window size as the offline analysis for consistency
 sr = 44100  # Sample rate for real-time audio processing
 
+buffer = np.zeros(window)  # Initialize a buffer to hold the audio data for processing
 blocksize = window // 2  # same as your stream
 pointer = blocksize  # Start processing from the first block of audio data
 
@@ -285,6 +380,7 @@ previous_rpm = None  # Initialize previous_rpm for smoothing
 blocks = [audio[i:i + blocksize] for i in range(0, len(audio), blocksize)]
 
 rpm = []
+rpm_estimates = []
 
 for block in blocks:
     if len(block) < blocksize:
@@ -297,8 +393,18 @@ for block in blocks:
 
 plt.figure(figsize=(10, 4))
 plt.plot(rpm)
+plt.title(f'RPM over time')
+plt.xlabel('Time (blocks)') 
+plt.ylabel('Estimated RPM')
+plt.ylim(0,6000)
+plt.grid()
+
+plt.figure(figsize=(10, 4))
+plt.plot(rpm_estimates)
 plt.title(f'Estimated RPM over time')
 plt.xlabel('Time (blocks)') 
 plt.ylabel('Estimated RPM')
+plt.ylim(0,6000)
 plt.grid()
+
 plt.show()
